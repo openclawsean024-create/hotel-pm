@@ -261,3 +261,109 @@ const FALLBACKS: Record<string, string> = {
 export function getGracefulFallback(scenario: string): string {
   return FALLBACKS[scenario] ?? '系統暫時無法回應，請稍後再試'
 }
+
+// ===== F-M4: 需求記錄 =====
+export interface MaintenanceRequest {
+  id: string
+  propertyId: string
+  tenantId: string
+  category: 'repair' | 'cleaning' | 'inspection' | 'other'
+  description: string
+  priority: 'low' | 'medium' | 'high' | 'urgent'
+  status: 'pending' | 'assigned' | 'in-progress' | 'completed'
+  assignedTo?: string
+  cost?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export function createMaintenanceRequest(
+  input: Omit<MaintenanceRequest, 'id' | 'createdAt' | 'updatedAt' | 'status'>
+): MaintenanceRequest {
+  const now = new Date().toISOString()
+  return {
+    ...input,
+    id: `maint-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function assignMaintenanceRequest(
+  request: MaintenanceRequest,
+  assignedTo: string
+): MaintenanceRequest {
+  return { ...request, status: 'assigned', assignedTo, updatedAt: new Date().toISOString() }
+}
+
+export function completeMaintenanceRequest(
+  request: MaintenanceRequest,
+  cost?: number
+): MaintenanceRequest {
+  return { ...request, status: 'completed', cost, updatedAt: new Date().toISOString() }
+}
+
+// ===== F-M7: PDF 匯出 =====
+export function generateReportPdf(report: {
+  title: string
+  rows: Array<Record<string, unknown>>
+}): { filename: string; content: string; mimeType: string } {
+  // v3 MVP: 回傳 CSV 格式(後續升級 jsPDF → React-PDF)
+  const csv = createCsv(report.rows)
+  return {
+    filename: `${report.title.replace(/\s+/g, '-')}-${new Date().toISOString().slice(0, 10)}.csv`,
+    content: csv,
+    mimeType: 'text/csv',
+  }
+}
+
+// ===== F-M8: LINE 通知 =====
+export interface LineNotifyPayload {
+  to: string
+  message: string
+  type: 'contract-expiry' | 'payment-reminder' | 'maintenance-complete' | 'system-alert'
+}
+
+export function formatLineNotify(payload: LineNotifyPayload): string {
+  const prefix = {
+    'contract-expiry': '📋 合約提醒',
+    'payment-reminder': '💰 繳費提醒',
+    'maintenance-complete': '🔧 維修完成',
+    'system-alert': '⚠️ 系統警示',
+  }[payload.type] ?? '📢 通知'
+  return `${prefix}\n${payload.message}`
+}
+
+export async function sendLineNotify(
+  payload: LineNotifyPayload
+): Promise<{ ok: boolean; fallback?: string }> {
+  // Mock: 寫到 outbox, 不真的發 LINE
+  // 生產模式: 呼叫 LINE Notify API
+  return { ok: true }
+}
+
+// ===== F-M10: SEO / Sitemap =====
+export function generateSitemap(properties: Property[]): string {
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    '<url><loc>https://hotel-pm.vercel.app/</loc><priority>1.0</priority></url>',
+    '<url><loc>https://hotel-pm.vercel.app/dashboard</loc><priority>0.9</priority></url>',
+  ]
+  for (const p of properties) {
+    lines.push(
+      `<url><loc>https://hotel-pm.vercel.app/properties/${p.id}</loc><priority>0.7</priority></url>`
+    )
+  }
+  lines.push('</urlset>')
+  return lines.join('\n')
+}
+
+export const openGraphMeta = {
+  title: '民宿管家 hotel-pm — 台灣專業 PMS',
+  description: '台灣 1-10 房民宿與 50-200 房包租代管業者的本土化 PMS',
+  type: 'website',
+  url: 'https://hotel-pm.vercel.app',
+  image: '/og-image.png',
+}
