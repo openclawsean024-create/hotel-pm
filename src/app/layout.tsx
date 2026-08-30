@@ -1,11 +1,20 @@
 import "./globals.css";
 import Link from "next/link";
 import type { Metadata } from "next";
+import { openGraphMeta } from "@/lib/domain";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://hotel-pm.vercel.app"),
   title: "民宿管家 hotel-pm — 物業管理系統",
   description:
     "台灣民宿與包租代管業者的純前端物業管理系統（PMS）：物業、房客、訂房、月報表四大模組。",
+  openGraph: {
+    title: openGraphMeta.title,
+    description: openGraphMeta.description,
+    type: "website",
+    url: openGraphMeta.url,
+    images: [{ url: openGraphMeta.image }],
+  },
 };
 
 export default function RootLayout({

@@ -48,6 +48,21 @@ export interface ContractAlert {
 }
 
 // ===== F-M1: 物業驗證 =====
+// 嚴格日期解析:invalid 字串會 throw,避免 NaN 污染計算
+// 使用情境:從 localStorage / API / 使用者輸入讀到 ISO 日期字串時,強制要求格式正確
+export function parseDateStrict(value: string, fieldName: string): Date {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) {
+    throw new Error(`無效的日期欄位 ${fieldName}: ${JSON.stringify(value)}`)
+  }
+  return d
+}
+
+// 從物業清單中依 ID 查找單筆;找不到回 null（用 null 而非 undefined,便於 caller 用 ? 鏈判斷）
+export function getPropertyById(properties: Property[], id: string): Property | null {
+  return properties.find((p) => p.id === id) ?? null
+}
+
 export function validateProperty(p: Partial<Property>): string[] {
   const errors: string[] = []
   if (!p.address || p.address.trim() === '') errors.push('請填寫地址')
@@ -66,7 +81,7 @@ export function getContractAlerts(
   const alerts: ContractAlert[] = []
   const today = now.getTime()
   for (const t of tenants) {
-    const end = new Date(t.contractEnd).getTime()
+    const end = parseDateStrict(t.contractEnd, 'contractEnd').getTime()
     const daysLeft = Math.floor((end - today) / (1000 * 60 * 60 * 24))
     if (daysLeft < 0) {
       alerts.push({
@@ -86,7 +101,7 @@ export function getContractAlerts(
 }
 
 export function calculateOverdueDays(dueDate: string, now: Date): number {
-  const due = new Date(dueDate).getTime()
+  const due = parseDateStrict(dueDate, 'dueDate').getTime()
   const cur = now.getTime()
   const diff = cur - due
   if (diff <= 0) return 0
@@ -110,10 +125,10 @@ export function validateBooking(b: Partial<Booking>): string[] {
 
 // ===== F-M3: 訂房看板 =====
 export function isBookingOverlapping(a: Booking, b: Booking): boolean {
-  const aStart = new Date(a.checkInDate).getTime()
-  const aEnd = new Date(a.checkOutDate).getTime()
-  const bStart = new Date(b.checkInDate).getTime()
-  const bEnd = new Date(b.checkOutDate).getTime()
+  const aStart = parseDateStrict(a.checkInDate, 'a.checkInDate').getTime()
+  const aEnd = parseDateStrict(a.checkOutDate, 'a.checkOutDate').getTime()
+  const bStart = parseDateStrict(b.checkInDate, 'b.checkInDate').getTime()
+  const bEnd = parseDateStrict(b.checkOutDate, 'b.checkOutDate').getTime()
   // 相鄰不視為重疊 (aEnd === bStart 不算重疊)
   return aStart < bEnd && bStart < aEnd
 }
@@ -123,14 +138,14 @@ export function getOccupancyRate(
   rangeStart: string,
   rangeEnd: string
 ): number {
-  const rangeStartMs = new Date(rangeStart).getTime()
-  const rangeEndMs = new Date(rangeEnd).getTime()
+  const rangeStartMs = parseDateStrict(rangeStart, 'rangeStart').getTime()
+  const rangeEndMs = parseDateStrict(rangeEnd, 'rangeEnd').getTime()
   const totalDays = Math.max(1, Math.floor((rangeEndMs - rangeStartMs) / (1000 * 60 * 60 * 24)))
   let occupiedDays = 0
   for (const b of bookings) {
     if (b.status === 'cancelled') continue
-    const bStart = Math.max(new Date(b.checkInDate).getTime(), rangeStartMs)
-    const bEnd = Math.min(new Date(b.checkOutDate).getTime(), rangeEndMs)
+    const bStart = Math.max(parseDateStrict(b.checkInDate, 'b.checkInDate').getTime(), rangeStartMs)
+    const bEnd = Math.min(parseDateStrict(b.checkOutDate, 'b.checkOutDate').getTime(), rangeEndMs)
     const overlap = Math.max(0, Math.floor((bEnd - bStart) / (1000 * 60 * 60 * 24)))
     occupiedDays += overlap
   }
@@ -161,7 +176,12 @@ export function parseIcsEvents(ics: string): Array<{ uid: string; start: string;
         events.push({ uid: ev.uid, start: ev.start, end: ev.end, summary: ev.summary })
       }
     }
-  } catch {
+  } catch (err) {
+    // 有意的吞例外:壞 ICS 不應炸 UI,fallback 文案由 getGracefulFallback('ics-parse') 提供
+    // 開發環境留 trace,生產環境保持安靜
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[ics-parse] failed to parse ICS payload:', err)
+    }
     return []
   }
   return events
@@ -180,6 +200,17 @@ export function calculateBreakdown(params: {
 }): { netIncome: number; ownerShare: number; operatorShare: number; checksum: number } {
   if (params.income < 0) throw new Error('收入不可為負數')
   if (params.expenses < 0) throw new Error('支出不可為負數')
+  // 驗證 ownerRatio 必須在 [0,1],避免 ownerShare > netIncome 破壞 checksum 不變式
+  const ratios: number[] = []
+  if (params.rule.type === 'ratio') ratios.push(params.rule.ownerRatio)
+  else if (params.rule.type === 'tiered') {
+    for (const t of params.rule.tiers) ratios.push(t.ownerRatio)
+  }
+  for (const r of ratios) {
+    if (!Number.isFinite(r) || r < 0 || r > 1) {
+      throw new Error(`ownerRatio 必須在 0~1 之間,收到: ${r}`)
+    }
+  }
   const netIncome = params.income - params.expenses
   let ownerShare = 0
   if (params.rule.type === 'ratio') {
@@ -212,24 +243,35 @@ export function calculateMonthlyReport(
   month: number
 ): Array<{ propertyId: string; totalIncome: number; bookingCount: number }> {
   return properties.map((p) => {
-    const matched = bookings.filter((b) => b.propertyId === p.id)
-    const totalIncome = matched
+    // 已取消的訂房不計入月報表的收入與筆數（取消等同交易未發生）
+    const activeBookings = bookings.filter(
+      (b) => b.propertyId === p.id && b.status !== 'cancelled'
+    )
+    const totalIncome = activeBookings
       .filter((b) => {
         const d = new Date(b.checkInDate)
         return d.getFullYear() === year && d.getMonth() + 1 === month
       })
       .reduce((sum, b) => sum + (b.totalAmount || 0), 0)
-    return { propertyId: p.id, totalIncome, bookingCount: matched.length }
+    return { propertyId: p.id, totalIncome, bookingCount: activeBookings.length }
   })
 }
 
 // ===== F-M4/F-M5: 需求與維修 =====
+// RFC 4180 CSV escape:欄位含 , " \r \n 時,用雙引號包起來,內部 " 改成 ""
+function escapeCsvField(value: string): string {
+  if (/[",\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`
+  }
+  return value
+}
+
 export function createCsv(rows: Array<Record<string, unknown>>): string {
   if (rows.length === 0) return ''
   const headers = Object.keys(rows[0])
-  const lines = [headers.join(',')]
+  const lines = [headers.map(escapeCsvField).join(',')]
   for (const row of rows) {
-    lines.push(headers.map((h) => String(row[h] ?? '')).join(','))
+    lines.push(headers.map((h) => escapeCsvField(String(row[h] ?? ''))).join(','))
   }
   return lines.join('\n')
 }
@@ -338,12 +380,30 @@ export function formatLineNotify(payload: LineNotifyPayload): string {
 export async function sendLineNotify(
   payload: LineNotifyPayload
 ): Promise<{ ok: boolean; fallback?: string }> {
-  // Mock: 寫到 outbox, 不真的發 LINE
-  // 生產模式: 呼叫 LINE Notify API
-  return { ok: true }
+  // Mock: 模擬 outbox queue 接收訊息並回結果,實際上不發 LINE Notify API。
+  // 真實實作請改為呼叫 LINE Notify API:
+  //   POST https://notify-api.line.me/api/notify
+  //   Header: Authorization: Bearer ${process.env.LINE_NOTIFY_TOKEN}
+  //   Body:  message=<formatLineNotify(payload)>
+  // payload 缺漏時回 fallback（沿用既有 line-failure 文案）
+  if (!payload.message || !payload.to) {
+    return { ok: false, fallback: getGracefulFallback('line-failure') }
+  }
+  const message = formatLineNotify(payload) // 預熱 message pipeline,證明端到端可用
+  return message ? { ok: true } : { ok: false, fallback: getGracefulFallback('line-failure') }
 }
 
 // ===== F-M10: SEO / Sitemap =====
+// XML escape:把 & < > ' " 轉成 entity,避免無效 / 可被利用的 sitemap 輸出
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/'/g, '&apos;')
+    .replace(/"/g, '&quot;')
+}
+
 export function generateSitemap(properties: Property[]): string {
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -353,7 +413,7 @@ export function generateSitemap(properties: Property[]): string {
   ]
   for (const p of properties) {
     lines.push(
-      `<url><loc>https://hotel-pm.vercel.app/properties/${p.id}</loc><priority>0.7</priority></url>`
+      `<url><loc>https://hotel-pm.vercel.app/properties/${escapeXml(p.id)}</loc><priority>0.7</priority></url>`
     )
   }
   lines.push('</urlset>')

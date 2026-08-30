@@ -2,6 +2,30 @@
   "name": "hotel-pm",
   "version": "3.0.0",
   "private": true,
+  "description": "台灣民宿與包租代管業者的本土化物業管理系統（PMS）：物業、房客、訂房、月報表四大模組，純前端 SPA + localStorage。",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclawsean024-create/hotel-pm.git"
+  },
+  "homepage": "https://hotel-pm.vercel.app/",
+  "bugs": {
+    "url": "https://github.com/openclawsean024-create/hotel-pm/issues"
+  },
+  "keywords": [
+    "pms",
+    "property-management",
+    "民宿",
+    "包租代管",
+    "taiwan",
+    "短租",
+    "typescript",
+    "nextjs"
+  ],
+  "author": {
+    "name": "Sophia (CPO) / Alan (CTO)",
+    "url": "https://github.com/openclawsean024-create/hotel-pm"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -21,6 +45,7 @@
   "devDependencies": {
     "@playwright/test": "^1.54.2",
     "@tailwindcss/postcss": "^4.1.11",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^22.15.30",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

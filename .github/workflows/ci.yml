@@ -1,0 +1,105 @@
+# hotel-pm CI — typecheck + test + build on every push & PR
+# 故意使用 npm（與 package.json scripts 一致）；pnpm install 在 pnpm v10 後預設阻擋 build scripts，會卡住 esbuild/sharp。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript strict typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (Vitest)
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build (Next.js)
+        run: npm run build
+
+      # 用 --audit-level=critical 而非 high:
+      # Next.js 16.2.10 有已知 high 漏洞（postcss / sharp transitive deps），
+      # 升級 Next.js 是 heavyweight dep change,排入 round 4 議題;
+      # 但 critical / zero-day 級漏洞仍要立刻擋下。
+      - name: npm audit (critical only)
+        run: npm audit --audit-level=critical
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build-${{ github.sha }}
+          path: .next/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # E2E job:安裝 Playwright Chromium 並跑 dashboard / 首頁 / properties 路由的 smoke test
+  # 與 verify job 並行;瀏覽器下載會被 CI cache 住,後續 run 只取 cache
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.sha }}
+          path: playwright-report/
+          retention-days: 3
+          if-no-files-found: ignore

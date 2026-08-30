@@ -5,7 +5,10 @@ import {
   calculateOverdueDays,
   getContractAlerts,
   getOccupancyRate,
+  getPropertyById,
+  generateSitemap,
   isBookingOverlapping,
+  parseDateStrict,
   parseIcsEvents,
   validateProperty,
   validateBooking,
@@ -13,6 +16,7 @@ import {
   createCsv,
   getGracefulFallback,
   isLawReviewRequired,
+  sendLineNotify,
   type Booking,
   type Property,
   type Tenant,
@@ -76,4 +80,131 @@ describe('POS、審核與法條', () => {
   it('POS 訂單拒絕錯誤總額', () => expect(validatePosOrder({ items: [{ name: '早餐', quantity: 2, unitPrice: 100 }], total: 100 })).toContain('總額驗算不符'))
   it('個資與住宿契約提交前需法條審核', () => expect(isLawReviewRequired('residential-contract')).toBe(true))
   it('一般備註不需法條審核', () => expect(isLawReviewRequired('note')).toBe(false))
+})
+
+describe('CSV 跳脫 (RFC 4180)', () => {
+  it('欄位含逗號會自動加雙引號', () =>
+    expect(createCsv([{ address: '台北,大安', rent: 1000 }])).toBe('address,rent\n"台北,大安",1000'))
+  it('欄位含雙引號會 escape 成兩個', () =>
+    expect(createCsv([{ note: 'A "B" C' }])).toBe('note\n"A ""B"" C"'))
+  it('欄位含換行會自動加雙引號', () =>
+    expect(createCsv([{ note: 'line1\nline2' }])).toBe('note\n"line1\nline2"'))
+  it('欄位無特殊字元時維持原樣', () =>
+    expect(createCsv([{ property: 'p1', status: 'pending' }])).toBe('property,status\np1,pending'))
+})
+
+describe('月報表排除已取消訂房', () => {
+  it('cancelled booking 不計入收入與筆數', () => {
+    const cancelled: Booking = { ...booking, id: 'b-cancel', status: 'cancelled', totalAmount: 9999 }
+    const r = calculateMonthlyReport([property], [booking, cancelled], [], 2026, 7)[0]
+    expect(r.totalIncome).toBe(6000)
+    expect(r.bookingCount).toBe(1)
+  })
+  it('無訂房時回傳零收入、零筆數', () => {
+    const r = calculateMonthlyReport([property], [], [], 2026, 7)[0]
+    expect(r.totalIncome).toBe(0)
+    expect(r.bookingCount).toBe(0)
+  })
+})
+
+describe('LINE Notify mock', () => {
+  it('payload 缺漏時回 ok=false 與 fallback', async () => {
+    const r = await sendLineNotify({ to: '', message: 'hello', type: 'system-alert' })
+    expect(r.ok).toBe(false)
+    expect(r.fallback).toContain('站內紅點')
+  })
+  it('payload 完整時回 ok=true', async () => {
+    const r = await sendLineNotify({ to: 'U123', message: '合約到期', type: 'contract-expiry' })
+    expect(r.ok).toBe(true)
+    expect(r.fallback).toBeUndefined()
+  })
+})
+
+describe('Sitemap XML escape', () => {
+  it('property id 含 & 會被 escape 成 &amp;', () => {
+    const xml = generateSitemap([{ ...property, id: 'p&1' }])
+    expect(xml).toContain('properties/p&amp;1')
+    expect(xml).not.toContain('properties/p&1')
+  })
+  it('property id 含 < > " \' 都會被 escape', () => {
+    const xml = generateSitemap([{ ...property, id: 'a<b>c"d\'e' }])
+    expect(xml).toContain('&lt;')
+    expect(xml).toContain('&gt;')
+    expect(xml).toContain('&quot;')
+    expect(xml).toContain('&apos;')
+  })
+  it('正常 id 不會被改動', () => {
+    const xml = generateSitemap([property])
+    expect(xml).toContain('properties/p1')
+  })
+})
+
+describe('拆帳 ownerRatio 範圍驗證', () => {
+  it('ratio > 1 會 throw', () => {
+    expect(() =>
+      calculateBreakdown({ income: 1000, expenses: 0, rule: { type: 'ratio', ownerRatio: 1.5 } })
+    ).toThrow(/ownerRatio 必須在 0~1 之間/)
+  })
+  it('ratio < 0 會 throw', () => {
+    expect(() =>
+      calculateBreakdown({ income: 1000, expenses: 0, rule: { type: 'ratio', ownerRatio: -0.1 } })
+    ).toThrow(/ownerRatio 必須在 0~1 之間/)
+  })
+  it('ratio = 0 邊界值合法', () => {
+    expect(() =>
+      calculateBreakdown({ income: 1000, expenses: 0, rule: { type: 'ratio', ownerRatio: 0 } })
+    ).not.toThrow()
+  })
+  it('tiered 任一 tier 的 ownerRatio 超出範圍會 throw', () => {
+    expect(() =>
+      calculateBreakdown({
+        income: 60000,
+        expenses: 10000,
+        rule: { type: 'tiered', tiers: [{ until: 30000, ownerRatio: 0.6 }, { until: Infinity, ownerRatio: 1.5 }] },
+      })
+    ).toThrow(/ownerRatio 必須在 0~1 之間/)
+  })
+})
+
+describe('parseDateStrict (F3 修正)', () => {
+  it('合法 ISO 字串回 Date 物件', () => {
+    expect(parseDateStrict('2026-07-10', 'checkIn').toISOString()).toBe('2026-07-10T00:00:00.000Z')
+  })
+  it('空字串會 throw', () => {
+    expect(() => parseDateStrict('', 'checkIn')).toThrow(/無效的日期欄位 checkIn/)
+  })
+  it('亂碼會 throw', () => {
+    expect(() => parseDateStrict('not-a-date', 'checkIn')).toThrow(/無效的日期欄位 checkIn/)
+  })
+  it('呼叫 getContractAlerts 傳 garbage contractEnd 會 throw', () => {
+    expect(() => getContractAlerts([{ id: 't-bad', contractEnd: 'bad-date' }], new Date())).toThrow(/contractEnd/)
+  })
+  it('呼叫 isBookingOverlapping 傳 garbage 日期會 throw', () => {
+    expect(() => isBookingOverlapping({ ...booking, checkInDate: 'xxx' }, booking)).toThrow(/a\.checkInDate/)
+  })
+  it('呼叫 getOccupancyRate 傳 garbage range 會 throw', () => {
+    expect(() => getOccupancyRate([], 'bad', '2026-07-31')).toThrow(/rangeStart/)
+  })
+})
+
+describe('ICS parse 友善錯誤 (F4 修正)', () => {
+  it('壞 ICS 回空陣列且不 throw', () => {
+    expect(parseIcsEvents('this is not ics')).toEqual([])
+  })
+  it('完全空字串回空陣列', () => {
+    expect(parseIcsEvents('')).toEqual([])
+  })
+})
+
+describe('getPropertyById', () => {
+  const list: Property[] = [property, { ...property, id: 'p2' }]
+  it('找到時回傳該物業物件', () => {
+    expect(getPropertyById(list, 'p1')?.address).toBe(property.address)
+  })
+  it('找不到時回 null（不是 undefined）', () => {
+    expect(getPropertyById(list, 'p-nonexistent')).toBeNull()
+  })
+  it('空清單回 null', () => {
+    expect(getPropertyById([], 'p1')).toBeNull()
+  })
 })
