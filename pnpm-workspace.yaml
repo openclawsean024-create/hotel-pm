@@ -1,6 +1,0 @@
-allowBuilds:
-  esbuild: true
-  sharp: true
-  unrs-resolver: true
-allowedBuilds: true
-onlyBuiltDependencies: esbuild,sharp,unrs-resolver,@tailwindcss/oxide,@tailwindcss/cli
