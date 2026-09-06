@@ -1,5 +1,9 @@
-# hotel-pm CI — typecheck + test + build on every push & PR
+# hotel-pm CI — typecheck + test + build + E2E on every push & PR
 # 故意使用 npm（與 package.json scripts 一致）；pnpm install 在 pnpm v10 後預設阻擋 build scripts，會卡住 esbuild/sharp。
+# v3.0.2 升級（2026-09-06 by Sean 10-repo-fleet）：
+# - 新增 workflow_dispatch 觸發（手動 deploy 備援路徑）
+# - 新增 deploy-to-vercel job（gated on workflow_dispatch，避免與 Vercel GitHub App 雙 deploy 衝突）
+# - secrets 需求：VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID
 
 name: CI
 
@@ -8,10 +12,19 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Deploy reason (for audit log)'
+        required: false
+        default: 'manual'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  DEPLOY_TARGET: vercel
 
 jobs:
   verify:
@@ -103,3 +116,37 @@ jobs:
           path: playwright-report/
           retention-days: 3
           if-no-files-found: ignore
+  # Manual deploy job — 備援路徑
+  # 預設情況下 deploy 由 Vercel GitHub App 自動接管（push to main 觸發）
+  # 本 job 只在 workflow_dispatch 手動觸發時執行，避免雙 deploy 來源衝突
+  # secrets 需求：VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID
+  deploy:
+    name: Deploy to Vercel (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [verify, e2e]
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Production build (Next.js)
+        run: npm run build
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'
+          working-directory: ./

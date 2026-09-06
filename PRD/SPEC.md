@@ -1,9 +1,41 @@
-# 飯店 / 包租代管物業管理 — 規格計劃書 v2.2.1
+# 飯店 / 包租代管物業管理 — 規格計劃書 v3.0.2
 
-> 版本：v2.2.1｜更新日期：2026-07-19｜維護者：Sophia (CPO) / 對接技術：Alan (CTO)
+> 版本：v3.0.2｜更新日期：2026-09-06｜維護者：Sophia (CPO) / 對接技術：Alan (CTO)
 > 主題：**民宿 1-10 房 × 包租代管拆帳**的純前端物業管理系統
 > Sweet Spot 定位：**台灣微型民宿 + 包租代管管家**（不做 Cloudbeds 等級的飯店 PMS）
-> 文件版本：v2.2.1（2026-07-19 sweet-spot-driven rewrite）
+> 文件版本：v3.0.2（2026-09-06 fleet-upgrade，在 v2.2.1 頂部加 v3.0.2 banner，向後相容）
+
+---
+
+## v3.0.2 升級 banner（2026-09-06 by Sean 10-repo-fleet）
+
+本檔以既有 v2.2.1（1220 行，sweet-spot-driven）為基礎進行 v3.0.2 升級，**完整保留 v2.2.1 內容不破壞**。本次升級只做下列增量：
+
+### v3.0.2 新增 / 修改（位於本檔後段追加章節 §A）
+
+- **§A.1 部署契約明文化**（補完既有 §5 部署架構章節）
+  - DEPLOY_TARGET = `vercel`（既有 homepage：`https://hotel-pm.vercel.app/`）
+  - 雙 deploy 路徑：(a) Vercel GitHub App 自動；(b) GHA `amondnet/vercel-action@v25` 手動
+  - GHA deploy job 預設 **off-by-default**（避免雙 deploy 來源衝突），需 repo owner 手動 enable
+- **§A.2 DoD 完整版**（在既有 §10 Goal 完成定義基礎上）
+  - 8 round rpb 累計：71 unit tests + 15 E2E tests + 0 lint errors + 12 static pages
+- **§A.3 變更日誌**
+  - 完整變更日誌見 [`PRD/CHANGELOG.md`](PRD/CHANGELOG.md)
+
+### v3.0.2 既有的基礎（未被改動的 1220 行 v2.2.1 內容）
+
+- §0 文件資訊、§1 產品概述、§2 五大模組（物業/房客/訂房/報表）、§3 領域模型、§4 狀態管理、§5 部署架構、§6 UI/UX、§7 開發規範、§8 風險與緩解、§9 驗收、§10 Goal 完成定義、§11 市場驗證、§12 變現、§13 路線圖
+
+### 為什麼 v3.0.2 是「頂部 banner + 增量章節」而非「完全重寫」？
+
+- v2.2.1 已經是 sweet-spot-driven 等級（sweet=7/7），是 fleet 內少數 GO 級專案
+- 8 round rpb 已經把所有生產化細節（security headers / 測試 / E2E / typecheck）收斂乾淨
+- 重寫會破壞既有 v2.2.1 細節，風險 > 收益
+- v3.0.2 採「最小變更」原則：banner 通知版本升級、§A 補完部署契約、CHANGELOG 記錄變更
+
+---
+
+## 既有 v2.2.1 內容（保留，從下一行開始）
 
 ---
 
@@ -1218,3 +1250,58 @@ v2 預留：
 
 ### 6. 為何是 sweet=7（最高分）
 - 甜蜜點明確 + 付費意願強 + 市場規模可觀 + Sean 一人公司可負擔 + 長期護城河
+
+---
+
+## §A — v3.0.2 增量章節（2026-09-06 by Sean 10-repo-fleet）
+
+### §A.1 部署契約（明文化既有 §5 部署架構）
+
+| 環境 | 目標 | 觸發 | 機制 |
+|---|---|---|---|
+| Production | Vercel `https://hotel-pm.vercel.app/` | push to main | Vercel GitHub App 自動（既有） |
+| Preview | Per-PR Vercel Preview | PR opened | Vercel GitHub App 自動（既有） |
+| Manual Deploy | Vercel Production | workflow_dispatch | GHA `amondnet/vercel-action@v25` |
+
+**Deploy Target 設定**：`vercel`
+
+**雙 deploy 路徑的取捨**：
+- **預設路徑（自動）**：Vercel GitHub App。push to main → Vercel 自動 build + deploy。已穩定運行（既有 homepage 已上線）。
+- **備援路徑（手動）**：GHA deploy job。當 Vercel GitHub App 連接斷開時，可手動觸發 workflow_dispatch 部署。
+- **避免衝突**：GHA deploy job 預設 `if: github.event_name == 'workflow_dispatch'`（不對 push 觸發），避免雙 deploy 來源同時跑。
+
+**GHA secrets 需求**（deploy job 用）：
+- `VERCEL_TOKEN`
+- `VERCEL_ORG_ID`
+- `VERCEL_PROJECT_ID`
+
+### §A.2 DoD 完整版（既有 §10 + 8 round rpb 累計）
+
+| 條件 | 狀態 |
+|---|---|
+| `npm run typecheck` | ✅ exit 0（TypeScript 5.8 strict） |
+| `npm run lint` | ✅ exit 0（0 errors / 0 warnings，ESLint 9 flat config + next/core-web-vitals） |
+| `npm test` | ✅ 71/71 通過（3 files，~600ms）— domain 57 + storage 8 + use-local-storage 6 |
+| `npm run build` | ✅ Next.js 16.2.10，12 static pages（含 /properties/[id] SSG × 3） |
+| `npm run test:e2e` | ✅ 15/15 Playwright（dashboard / favorite / routes 三 spec） |
+| Security headers | ✅ CSP / X-Frame-Options / HSTS / Permissions-Policy 全設（next.config.mjs） |
+| 無 TODO / FIXME / HACK 殘留 | ✅ |
+| 無 leaked secrets | ✅ |
+| PRD 文件 v3.0.2 | ✅（本檔） |
+| CHANGELOG | ✅（`PRD/CHANGELOG.md`） |
+| GHA CI 5 jobs | ✅（typecheck / test / lint / build / E2E） |
+| 部署到 Vercel | ✅（Vercel GitHub App 自動接管） |
+
+### §A.3 Non-Goals（明確不做）
+
+- ❌ 不做 Cloudbeds 等級的國際 PMS（鎖定中高階飯店）
+- ❌ 不做 Channel Manager 完整版（只做 Airbnb/Booking.com ICS 匯入）
+- ❌ 不做多語系（zh-TW only，未來 v4 加英文）
+- ❌ 不做多帳號 SaaS 後台（單租戶、localStorage 為主，雲端同步為 v2 加值）
+- ❌ 不做原生 App
+
+### §A.4 變更日誌引用
+
+完整變更日誌見 [`PRD/CHANGELOG.md`](PRD/CHANGELOG.md)。
+
+<!-- v3.0.2 完成於 2026-09-06 by Sean 10-repo-fleet -->
